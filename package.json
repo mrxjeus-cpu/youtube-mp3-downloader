@@ -4,7 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "dev": "NODE_ENV=development node server.js",
+    "prod": "NODE_ENV=production node server.js",
+    "start:env": "DOTENV_CONFIG_PATH=$NODE_ENV node server.js"
   },
   "keywords": [],
   "author": "",

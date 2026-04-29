@@ -1,7 +1,9 @@
 node_modules/
 temp/
 
-# Environment variables
+# Environment variables (keep .env.example)
 .env
 .env.local
+.env.development
 .env.production
+.env.*.local

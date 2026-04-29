@@ -1,10 +1,20 @@
-require('dotenv').config();
+// Load environment variables từ file .env (hoặc file custom)
+// Sử dụng: node server.js hoặc DOTENV_CONFIG_PATH=.env.production node server.js
+const path = require('path');
+const envPath = process.env.DOTENV_CONFIG_PATH || process.env.NODE_ENV || '.env';
+const envFilePath = path.resolve(process.cwd(), envPath);
+
+// Chỉ log nếu không phải .env mặc định (để tránh confusion)
+if (envPath !== '.env') {
+    console.log(`📝 Loading env from: ${envFilePath}`);
+}
+
+require('dotenv').config({ path: envFilePath });
 const express = require('express');
 const cors = require('cors');
 const { exec, spawn } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs');
-const path = require('path');
 
 const execAsync = promisify(exec);
 const app = express();
