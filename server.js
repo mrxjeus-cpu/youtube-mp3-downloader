@@ -64,8 +64,9 @@ app.get('/api/info', async (req, res) => {
     console.log(`[INFO] Fetching info for: ${cleanUrl}`);
 
     try {
-        const { stdout } = await execAsync(
-            `"${PYTHON_PATH}" "${YT_DLP_PATH}" "${cleanUrl}" --dump-single-json --no-warnings --no-playlist`
+        const { stdout, stderr } = await execAsync(
+            `"${PYTHON_PATH}" "${YT_DLP_PATH}" "${cleanUrl}" --dump-single-json --no-warnings --no-playlist`,
+            { maxBuffer: 10 * 1024 * 1024 } // Tăng buffer lên 10MB
         );
         const info = JSON.parse(stdout);
 
@@ -76,8 +77,18 @@ app.get('/api/info', async (req, res) => {
             uploader: info.uploader
         });
     } catch (error) {
-        console.error('[ERROR] Fetching info failed:', error.message);
-        console.error('[ERROR] stderr:', error.stderr);
+        // Log chi tiết lỗi để debug trên VPS
+        console.error('===== ERROR DETAILS =====');
+        console.error(`[ERROR] Message: ${error.message}`);
+        console.error(`[ERROR] Code: ${error.code}`);
+        console.error(`[ERROR] Killed: ${error.killed}`);
+        console.error(`[ERROR] Stderr: ${error.stderr || 'No stderr'}`);
+        console.error(`[ERROR] Stdout: ${error.stdout ? error.stdout.substring(0, 500) : 'No stdout'}`);
+        console.error(`[ERROR] Python Path: ${PYTHON_PATH}`);
+        console.error(`[ERROR] yt-dlp Path: ${YT_DLP_PATH}`);
+        console.error(`[ERROR] Command: "${PYTHON_PATH}" "${YT_DLP_PATH}" "${cleanUrl}" --dump-single-json --no-warnings --no-playlist`);
+        console.error('===== END ERROR DETAILS =====');
+
         res.status(500).json({ error: 'Link không hợp lệ hoặc đã bị giới hạn. Vui lòng thử link khác.' });
     }
 });
@@ -98,6 +109,8 @@ app.get('/api/download', async (req, res) => {
     // Format: chi lay audio, khong video
     const format = 'bestaudio[abr<=128]'; // Gioi han bitrate de tai nhanh hon
 
+    console.log(`[INFO] Downloading: ${cleanUrl} | Quality: ${quality}kbps`);
+
     try {
         // Gửi header trước để browser biết là file download
         res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeTitle)}.mp3"`);
@@ -105,24 +118,39 @@ app.get('/api/download', async (req, res) => {
 
         // Gọi yt-dlp để tải và xử lý (tối ưu tốc độ)
         await execAsync(
-            `"${PYTHON_PATH}" "${YT_DLP_PATH}" "${cleanUrl}" -o "${outputPath}" -f "${format}" -x --audio-format mp3 --audio-quality ${audioQuality} --embed-thumbnail --add-metadata --no-playlist --progress`
+            `"${PYTHON_PATH}" "${YT_DLP_PATH}" "${cleanUrl}" -o "${outputPath}" -f "${format}" -x --audio-format mp3 --audio-quality ${audioQuality} --embed-thumbnail --add-metadata --no-playlist --progress`,
+            { maxBuffer: 10 * 1024 * 1024 }
         );
 
         // Kiểm tra file đã được tạo thành công chưa
         if (!fs.existsSync(outputPath)) {
+            console.error('[ERROR] File not created after download');
             return res.status(500).json({ error: 'Lỗi khi tạo file MP3.' });
         }
+
+        console.log(`[INFO] File created successfully: ${outputPath}`);
 
         // Gửi file về cho người dùng tải
         res.download(outputPath, `${safeTitle}.mp3`, (err) => {
             // Xóa file tạm sau khi tải xong
             if (fs.existsSync(outputPath)) {
                 fs.unlinkSync(outputPath);
+                console.log(`[INFO] Temp file deleted: ${outputPath}`);
             }
         });
 
     } catch (error) {
-        console.error('Error downloading:', error.message);
+        // Log chi tiết lỗi để debug trên VPS
+        console.error('===== DOWNLOAD ERROR DETAILS =====');
+        console.error(`[ERROR] Message: ${error.message}`);
+        console.error(`[ERROR] Code: ${error.code}`);
+        console.error(`[ERROR] Stderr: ${error.stderr || 'No stderr'}`);
+        console.error(`[ERROR] Python Path: ${PYTHON_PATH}`);
+        console.error(`[ERROR] yt-dlp Path: ${YT_DLP_PATH}`);
+        console.error(`[ERROR] Output Path: ${outputPath}`);
+        console.error(`[ERROR] Clean URL: ${cleanUrl}`);
+        console.error('===== END ERROR DETAILS =====');
+
         if (!res.headersSent) {
             res.status(500).json({ error: 'Quá trình tải bị lỗi. Vui lòng thử lại.' });
         }
@@ -148,6 +176,8 @@ app.get('/api/download-progress', async (req, res) => {
     const sendProgress = (data) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
+
+    console.log(`[INFO] Download with progress: ${cleanUrl} | Quality: ${quality}kbps`);
 
     try {
         sendProgress({ status: 'Đang chuẩn bị...', progress: 0, stage: 'preparing' });
@@ -224,6 +254,7 @@ app.get('/api/download-progress', async (req, res) => {
 
         ytDlp.on('close', async (code) => {
             if (code === 0 && fs.existsSync(outputPath)) {
+                console.log(`[INFO] Download completed: ${safeTitle}.mp3`);
                 sendProgress({
                     status: 'Hoàn thành!',
                     progress: 100,
@@ -231,6 +262,7 @@ app.get('/api/download-progress', async (req, res) => {
                     downloadUrl: `/api/download-file?filename=${encodeURIComponent(safeTitle)}.mp3`
                 });
             } else {
+                console.error(`[ERROR] Download failed | Exit code: ${code} | File exists: ${fs.existsSync(outputPath)}`);
                 sendProgress({
                     status: 'Lỗi!',
                     progress: 0,
@@ -242,6 +274,7 @@ app.get('/api/download-progress', async (req, res) => {
         });
 
         ytDlp.on('error', (err) => {
+            console.error('[ERROR] yt-dlp spawn error:', err);
             sendProgress({
                 status: 'Lỗi!',
                 progress: 0,
@@ -282,6 +315,13 @@ app.get('/api/download-file', (req, res) => {
 // Chạy server ở cổng từ .env hoặc mặc định 8080
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-    console.log(`✅ Server đang chạy thành công tại: http://localhost:${PORT}`);
+    console.log('=================================');
+    console.log('🚀 YouTube MP3 Downloader Started');
+    console.log('=================================');
+    console.log(`🌐 Server URL: http://localhost:${PORT}`);
     console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🐍 Python Path: ${PYTHON_PATH}`);
+    console.log(`📁 Temp Dir: ${TEMP_DIR}`);
+    console.log(`🎵 Default Quality: ${process.env.DEFAULT_AUDIO_QUALITY || '128'}kbps`);
+    console.log('=================================');
 });
