@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube MP3 Downloader (Pro)</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 450px;
+        }
+        h2 { text-align: center; color: #333; margin-top: 0;}
+        input[type="text"] {
+            width: 100%;
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            box-sizing: border-box;
+            margin-bottom: 15px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        input[type="text"]:focus { border-color: #ff0000; outline: none; }
+        button {
+            padding: 12px;
+            background: #ff0000;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            font-size: 16px;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        button:hover { background: #cc0000; }
+        button:disabled { background: #cccccc; cursor: not-allowed; color: #666;}
+
+        #result { margin-top: 25px; display: none; text-align: center; }
+        #result img { max-width: 180px; border-radius: 10px; margin-bottom: 15px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .title { font-weight: bold; font-size: 18px; color: #222; margin-bottom: 5px; }
+        .duration { color: #888; margin-bottom: 20px; font-size: 14px; }
+        .error { color: #d93025; margin-top: 15px; font-size: 14px; text-align: center; }
+
+        /* Progress Bar Styles */
+        .progress-container {
+            display: none;
+            margin-top: 20px;
+            text-align: center;
+        }
+        .progress-bar-wrapper {
+            background: #f0f0f0;
+            border-radius: 10px;
+            height: 20px;
+            overflow: hidden;
+            margin: 10px 0;
+            position: relative;
+        }
+        .progress-bar {
+            background: linear-gradient(90deg, #ff0000, #cc0000);
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 10px;
+        }
+        .progress-text {
+            font-size: 13px;
+            color: #555;
+            margin-top: 5px;
+        }
+        .progress-status {
+            font-size: 14px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .download-complete {
+            display: none;
+            margin-top: 15px;
+        }
+        .download-complete a {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: bold;
+        }
+        .download-complete a:hover {
+            background: #45a049;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>🎵 YouTube to MP3</h2>
+    <input type="text" id="urlInput" placeholder="Dán link YouTube vào đây..." onkeypress="handleEnter(event)">
+    <button id="fetchBtn" onclick="fetchInfo()">Lấy thông tin bài hát</button>
+
+    <div id="error" class="error"></div>
+
+    <div id="result">
+        <img id="thumbnail" src="" alt="Thumbnail">
+        <div class="title" id="title"></div>
+        <div class="duration" id="duration"></div>
+
+        <div class="quality-selector" style="margin: 15px 0;">
+            <label style="font-size: 14px; color: #555;">Chất lượng âm thanh:</label>
+            <div style="display: flex; gap: 10px; margin-top: 8px;">
+                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 13px;">
+                    <input type="radio" name="quality" value="128" checked>
+                    <span>128kbps ⚡ (Nhanh)</span>
+                </label>
+                <label style="display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 13px;">
+                    <input type="radio" name="quality" value="320">
+                    <span>320kbps 🔊 (Cao)</span>
+                </label>
+            </div>
+        </div>
+
+        <button id="downloadBtn" onclick="downloadMusic()">⬇️ Tải MP3</button>
+
+        <!-- Progress Bar -->
+        <div id="progressContainer" class="progress-container">
+            <div id="progressStatus" class="progress-status">Đang chuẩn bị...</div>
+            <div class="progress-bar-wrapper">
+                <div id="progressBar" class="progress-bar"></div>
+            </div>
+            <div id="progressText" class="progress-text">0%</div>
+        </div>
+
+        <!-- Download Complete -->
+        <div id="downloadComplete" class="download-complete">
+            <a id="downloadLink" href="#" download>📥 Tải file MP3</a>
+        </div>
+    </div>
+</div>
+
+<script>
+    let currentUrl = '';
+    let currentTitle = '';
+    const PORT = '8080'; // Phải trùng với port trong server.js
+
+    // Bấm Enter để tìm kiếm
+    function handleEnter(e) {
+        if (e.key === 'Enter') fetchInfo();
+    }
+
+    async function fetchInfo() {
+        const url = document.getElementById('urlInput').value.trim();
+        const errorDiv = document.getElementById('error');
+        const resultDiv = document.getElementById('result');
+
+        if (!url) {
+            errorDiv.textContent = 'Vui lòng nhập link YouTube!';
+            return;
+        }
+
+        errorDiv.textContent = '';
+        document.getElementById('fetchBtn').disabled = true;
+        document.getElementById('fetchBtn').textContent = 'Đang lấy thông tin...';
+        resultDiv.style.display = 'none';
+
+        // Reset UI khi fetch link mới
+        resetDownloadUI();
+
+        try {
+            // GỌI ĐÚNG LOCALHOST ĐỂ TRÁNH LỖI CHUYỂN HƯỚNG
+            const response = await fetch(`http://localhost:${PORT}/api/info?url=${encodeURIComponent(url)}`);
+            const data = await response.json();
+
+            if (data.error) throw new Error(data.error);
+
+            currentUrl = url;
+            currentTitle = data.title;
+
+            document.getElementById('thumbnail').src = data.thumbnail;
+            document.getElementById('title').textContent = data.title;
+            document.getElementById('duration').textContent = `Thời lượng: ${data.duration}`;
+            resultDiv.style.display = 'block';
+        } catch (err) {
+            errorDiv.textContent = err.message;
+        } finally {
+            document.getElementById('fetchBtn').disabled = false;
+            document.getElementById('fetchBtn').textContent = 'Lấy thông tin bài hát';
+        }
+    }
+
+    // Hàm reset UI khi fetch link mới
+    function resetDownloadUI() {
+        const downloadBtn = document.getElementById('downloadBtn');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+        const progressStatus = document.getElementById('progressStatus');
+        const downloadComplete = document.getElementById('downloadComplete');
+
+        // Reset nút download
+        downloadBtn.disabled = false;
+        downloadBtn.style.display = 'block';
+        downloadBtn.textContent = '⬇️ Tải MP3';
+
+        // Ẩn progress bar
+        progressContainer.style.display = 'none';
+        progressBar.style.width = '0%';
+        progressText.textContent = '0%';
+        progressStatus.textContent = 'Đang chuẩn bị...';
+        progressStatus.style.color = '#333';
+
+        // Ẩn download complete
+        downloadComplete.style.display = 'none';
+    }
+
+    function downloadMusic() {
+        if (!currentUrl) return;
+
+        const downloadBtn = document.getElementById('downloadBtn');
+        const quality = document.querySelector('input[name="quality"]:checked').value;
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+        const progressText = document.getElementById('progressText');
+        const progressStatus = document.getElementById('progressStatus');
+        const downloadComplete = document.getElementById('downloadComplete');
+        const downloadLink = document.getElementById('downloadLink');
+
+        // Reset UI
+        downloadBtn.disabled = true;
+        downloadBtn.style.display = 'none';
+        progressContainer.style.display = 'block';
+        downloadComplete.style.display = 'none';
+        progressBar.style.width = '0%';
+        progressText.textContent = '0%';
+        progressStatus.textContent = 'Đang chuẩn bị...';
+
+        const safeTitle = currentTitle || 'nhac';
+
+        // Tạo EventSource để nhận progress updates
+        const progressUrl = `http://localhost:${PORT}/api/download-progress?url=${encodeURIComponent(currentUrl)}&title=${encodeURIComponent(safeTitle)}&quality=${quality}`;
+        const eventSource = new EventSource(progressUrl);
+
+        eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            // Xác định % để hiển thị (ưu tiên downloadPercent nếu có)
+            const displayPercent = data.downloadPercent || data.progress;
+
+            // Cập nhật progress bar và text (đồng bộ)
+            progressBar.style.width = `${data.progress}%`;
+            progressText.textContent = `${displayPercent}%`;
+            progressStatus.textContent = data.status;
+
+            // Khi hoàn thành
+            if (data.stage === 'complete') {
+                eventSource.close();
+                progressStatus.textContent = '✅ Hoàn thành!';
+                progressStatus.style.color = '#4CAF50';
+
+                // Hiển thị link download
+                downloadLink.href = `http://localhost:${PORT}${data.downloadUrl}`;
+                downloadComplete.style.display = 'block';
+
+                // Reset nút download sau 3 giây
+                setTimeout(() => {
+                    downloadBtn.disabled = false;
+                    downloadBtn.style.display = 'block';
+                    downloadBtn.textContent = '⬇️ Tải MP3';
+                    progressContainer.style.display = 'none';
+                }, 3000);
+            }
+
+            // Khi có lỗi
+            if (data.stage === 'error') {
+                eventSource.close();
+                progressStatus.textContent = '❌ Lỗi!';
+                progressStatus.style.color = '#d93025';
+                progressText.textContent = data.error || 'Không thể tải bài hát';
+
+                setTimeout(() => {
+                    downloadBtn.disabled = false;
+                    downloadBtn.style.display = 'block';
+                    downloadBtn.textContent = '⬇️ Tải MP3';
+                    progressContainer.style.display = 'none';
+                }, 3000);
+            }
+        };
+
+        eventSource.onerror = () => {
+            eventSource.close();
+            progressStatus.textContent = '❌ Mất kết nối!';
+            progressStatus.style.color = '#d93025';
+
+            setTimeout(() => {
+                downloadBtn.disabled = false;
+                downloadBtn.style.display = 'block';
+                downloadBtn.textContent = '⬇️ Tải MP3';
+                progressContainer.style.display = 'none';
+            }, 3000);
+        };
+    }
+</script>
+
+</body>
+</html>

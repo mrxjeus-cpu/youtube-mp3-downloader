@@ -1,0 +1,278 @@
+const express = require('express');
+const cors = require('cors');
+const { exec, spawn } = require('child_process');
+const { promisify } = require('util');
+const fs = require('fs');
+const path = require('path');
+
+const execAsync = promisify(exec);
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// Cấu hình Python 3.11 để chạy yt-dlp
+const PYTHON_PATH = '/opt/homebrew/bin/python3.11';
+const YT_DLP_PATH = path.join(__dirname, 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp');
+
+// Phục vụ file tĩnh từ folder public
+app.use(express.static('public'));
+
+// Tạo folder tạm để chứa file nhạc (nếu chưa có)
+const TEMP_DIR = path.join(__dirname, 'temp');
+if (!fs.existsSync(TEMP_DIR)) {
+    fs.mkdirSync(TEMP_DIR);
+}
+
+// Hàm làm sạch tên file (loại bỏ ký tự đặc biệt hệ điều hành)
+function sanitizeFilename(name) {
+    if (!name) return 'nhac';
+    return name.replace(/[/\\?%*:|"<>]/g, '-').trim();
+}
+
+// Hàm làm sạch URL YouTube (chỉ giữ video ID, loại bỏ playlist)
+function cleanYouTubeUrl(url) {
+    if (!url) return url;
+
+    // Extract video ID from various YouTube URL formats
+    const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
+        /[?&]v=([^&\n?#]+)/
+    ];
+
+    for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match && match[1]) {
+            return `https://www.youtube.com/watch?v=${match[1]}`;
+        }
+    }
+
+    return url;
+}
+
+// ---------------- API 1: LẤY THÔNG TIN BÀI HÁT ----------------
+app.get('/api/info', async (req, res) => {
+    const url = req.query.url;
+    if (!url) return res.status(400).json({ error: 'Thiếu URL' });
+
+    const cleanUrl = cleanYouTubeUrl(url);
+
+    try {
+        const { stdout } = await execAsync(
+            `"${PYTHON_PATH}" "${YT_DLP_PATH}" "${cleanUrl}" --dump-single-json --no-warnings --no-playlist`
+        );
+        const info = JSON.parse(stdout);
+
+        res.json({
+            title: info.title,
+            thumbnail: info.thumbnail,
+            duration: info.duration_string,
+            uploader: info.uploader
+        });
+    } catch (error) {
+        console.error('Error fetching info:', error.message);
+        res.status(500).json({ error: 'Link không hợp lệ hoặc đã bị giới hạn. Vui lòng thử link khác.' });
+    }
+});
+
+// ---------------- API 2: TẢI NHẠC MP3 (TỐC ĐỘ CAO) ----------------
+app.get('/api/download', async (req, res) => {
+    const url = req.query.url;
+    const title = req.query.title || 'nhac';
+    const quality = req.query.quality || '128'; // 128 (nhanh) hoặc 320 (chat luong cao)
+
+    const cleanUrl = cleanYouTubeUrl(url);
+    const safeTitle = sanitizeFilename(title);
+    const outputPath = path.join(TEMP_DIR, `${safeTitle}.mp3`);
+
+    // Audio quality: 5 = 128kbps (nhanh), 0 = 320kbps (chat luong cao)
+    const audioQuality = quality === '320' ? '0' : '5';
+
+    // Format: chi lay audio, khong video
+    const format = 'bestaudio[abr<=128]'; // Gioi han bitrate de tai nhanh hon
+
+    try {
+        // Gửi header trước để browser biết là file download
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(safeTitle)}.mp3"`);
+        res.setHeader('Content-Type', 'audio/mpeg');
+
+        // Gọi yt-dlp để tải và xử lý (tối ưu tốc độ)
+        await execAsync(
+            `"${PYTHON_PATH}" "${YT_DLP_PATH}" "${cleanUrl}" -o "${outputPath}" -f "${format}" -x --audio-format mp3 --audio-quality ${audioQuality} --embed-thumbnail --add-metadata --no-playlist --progress`
+        );
+
+        // Kiểm tra file đã được tạo thành công chưa
+        if (!fs.existsSync(outputPath)) {
+            return res.status(500).json({ error: 'Lỗi khi tạo file MP3.' });
+        }
+
+        // Gửi file về cho người dùng tải
+        res.download(outputPath, `${safeTitle}.mp3`, (err) => {
+            // Xóa file tạm sau khi tải xong
+            if (fs.existsSync(outputPath)) {
+                fs.unlinkSync(outputPath);
+            }
+        });
+
+    } catch (error) {
+        console.error('Error downloading:', error.message);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Quá trình tải bị lỗi. Vui lòng thử lại.' });
+        }
+    }
+});
+
+// ---------------- API 3: TẢI NHẠC MP3 (CÓ PROGRESS) ----------------
+app.get('/api/download-progress', async (req, res) => {
+    const url = req.query.url;
+    const title = req.query.title || 'nhac';
+    const quality = req.query.quality || '128';
+
+    const cleanUrl = cleanYouTubeUrl(url);
+    const safeTitle = sanitizeFilename(title);
+    const outputPath = path.join(TEMP_DIR, `${safeTitle}.mp3`);
+    const audioQuality = quality === '320' ? '0' : '5';
+    const format = quality === '320' ? 'bestaudio' : 'bestaudio[abr<=128]';
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const sendProgress = (data) => {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+        sendProgress({ status: 'Đang chuẩn bị...', progress: 0, stage: 'preparing' });
+
+        const args = [
+            YT_DLP_PATH,
+            cleanUrl,
+            '-o', outputPath,
+            '-f', format,
+            '-x',
+            '--audio-format', 'mp3',
+            '--audio-quality', audioQuality,
+            '--embed-thumbnail',
+            '--add-metadata',
+            '--no-playlist',
+            '--newline',
+            '--no-warnings'
+        ];
+
+        const ytDlp = spawn(PYTHON_PATH, args);
+
+        let lastProgress = 0;
+        let isConverting = false;
+
+        // Parse progress từ cả stdout và stderr
+        ytDlp.stdout.on('data', (data) => {
+            const lines = data.toString().split('\n');
+            parseProgress(lines);
+        });
+
+        ytDlp.stderr.on('data', (data) => {
+            const lines = data.toString().split('\n');
+            parseProgress(lines);
+        });
+
+        function parseProgress(lines) {
+            for (const line of lines) {
+                // Download progress: [download]  45.2% of 10.00MiB at  1.00MiB/s
+                const downloadMatch = line.match(/\[download\]\s+(\d+\.?\d*)%/);
+                if (downloadMatch && !isConverting) {
+                    const progress = parseFloat(downloadMatch[1]);
+                    // Chỉ update khi progress thay đổi đáng kể (tránh spam)
+                    if (progress - lastProgress >= 1 || progress === 100) {
+                        lastProgress = progress;
+                        sendProgress({
+                            status: `Đang tải... ${Math.round(progress)}%`,
+                            progress: Math.round(progress * 0.8), // Download chiếm 80%
+                            stage: 'download',
+                            downloadPercent: Math.round(progress)
+                        });
+                    }
+                }
+
+                // Detect khi bắt đầu convert
+                if (line.includes('[ffmpeg]') || line.includes('Converting audio')) {
+                    isConverting = true;
+                    sendProgress({
+                        status: 'Đang chuyển đổi sang MP3...',
+                        progress: 80,
+                        stage: 'converting'
+                    });
+                }
+
+                // Destination file (khi convert xong)
+                if (line.includes('[ffmpeg] Destination:')) {
+                    sendProgress({
+                        status: 'Đang hoàn thiện...',
+                        progress: 95,
+                        stage: 'finalizing'
+                    });
+                }
+            }
+        }
+
+        ytDlp.on('close', async (code) => {
+            if (code === 0 && fs.existsSync(outputPath)) {
+                sendProgress({
+                    status: 'Hoàn thành!',
+                    progress: 100,
+                    stage: 'complete',
+                    downloadUrl: `/api/download-file?filename=${encodeURIComponent(safeTitle)}.mp3`
+                });
+            } else {
+                sendProgress({
+                    status: 'Lỗi!',
+                    progress: 0,
+                    stage: 'error',
+                    error: 'Không thể tải bài hát. Vui lòng thử lại.'
+                });
+            }
+            res.end();
+        });
+
+        ytDlp.on('error', (err) => {
+            sendProgress({
+                status: 'Lỗi!',
+                progress: 0,
+                stage: 'error',
+                error: err.message
+            });
+            res.end();
+        });
+
+    } catch (error) {
+        sendProgress({
+            status: 'Lỗi!',
+            progress: 0,
+            stage: 'error',
+            error: error.message
+        });
+        res.end();
+    }
+});
+
+// ---------------- API 4: TẢI FILE SAU KHI XONG ----------------
+app.get('/api/download-file', (req, res) => {
+    const filename = req.query.filename;
+    const safeFilename = sanitizeFilename(filename.replace('.mp3', ''));
+    const filePath = path.join(TEMP_DIR, `${safeFilename}.mp3`);
+
+    if (fs.existsSync(filePath)) {
+        res.download(filePath, `${safeFilename}.mp3`, (err) => {
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        });
+    } else {
+        res.status(404).json({ error: 'File không tồn tại.' });
+    }
+});
+
+// Chạy server ở cổng 8080
+const PORT = 8080;
+app.listen(PORT, () => {
+    console.log(`✅ Server đang chạy thành công tại: http://localhost:${PORT}`);
+});
