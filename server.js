@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { exec, spawn } = require('child_process');
@@ -7,18 +8,23 @@ const path = require('path');
 
 const execAsync = promisify(exec);
 const app = express();
-app.use(cors());
+
+// Cấu hình CORS từ .env hoặc cho phép tất cả
+const corsOrigin = process.env.CORS_ORIGIN || '*';
+app.use(cors({
+    origin: corsOrigin
+}));
 app.use(express.json());
 
-// Cấu hình Python 3.11 để chạy yt-dlp
-const PYTHON_PATH = '/opt/homebrew/bin/python3.11';
-const YT_DLP_PATH = path.join(__dirname, 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp');
+// Cấu hình Python để chạy yt-dlp (lấy từ .env hoặc dùng mặc định)
+const PYTHON_PATH = process.env.PYTHON_PATH || '/usr/bin/python3';
+const YT_DLP_PATH = process.env.YT_DLP_PATH || path.join(__dirname, 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp');
 
 // Phục vụ file tĩnh từ folder public
 app.use(express.static('public'));
 
 // Tạo folder tạm để chứa file nhạc (nếu chưa có)
-const TEMP_DIR = path.join(__dirname, 'temp');
+const TEMP_DIR = path.join(__dirname, process.env.TEMP_DIR || 'temp');
 if (!fs.existsSync(TEMP_DIR)) {
     fs.mkdirSync(TEMP_DIR);
 }
@@ -55,6 +61,7 @@ app.get('/api/info', async (req, res) => {
     if (!url) return res.status(400).json({ error: 'Thiếu URL' });
 
     const cleanUrl = cleanYouTubeUrl(url);
+    console.log(`[INFO] Fetching info for: ${cleanUrl}`);
 
     try {
         const { stdout } = await execAsync(
@@ -69,7 +76,8 @@ app.get('/api/info', async (req, res) => {
             uploader: info.uploader
         });
     } catch (error) {
-        console.error('Error fetching info:', error.message);
+        console.error('[ERROR] Fetching info failed:', error.message);
+        console.error('[ERROR] stderr:', error.stderr);
         res.status(500).json({ error: 'Link không hợp lệ hoặc đã bị giới hạn. Vui lòng thử link khác.' });
     }
 });
@@ -78,7 +86,7 @@ app.get('/api/info', async (req, res) => {
 app.get('/api/download', async (req, res) => {
     const url = req.query.url;
     const title = req.query.title || 'nhac';
-    const quality = req.query.quality || '128'; // 128 (nhanh) hoặc 320 (chat luong cao)
+    const quality = req.query.quality || process.env.DEFAULT_AUDIO_QUALITY || '128';
 
     const cleanUrl = cleanYouTubeUrl(url);
     const safeTitle = sanitizeFilename(title);
@@ -125,7 +133,7 @@ app.get('/api/download', async (req, res) => {
 app.get('/api/download-progress', async (req, res) => {
     const url = req.query.url;
     const title = req.query.title || 'nhac';
-    const quality = req.query.quality || '128';
+    const quality = req.query.quality || process.env.DEFAULT_AUDIO_QUALITY || '128';
 
     const cleanUrl = cleanYouTubeUrl(url);
     const safeTitle = sanitizeFilename(title);
@@ -271,8 +279,9 @@ app.get('/api/download-file', (req, res) => {
     }
 });
 
-// Chạy server ở cổng 8080
-const PORT = 8080;
+// Chạy server ở cổng từ .env hoặc mặc định 8080
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
     console.log(`✅ Server đang chạy thành công tại: http://localhost:${PORT}`);
+    console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
 });

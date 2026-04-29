@@ -154,7 +154,6 @@
 <script>
     let currentUrl = '';
     let currentTitle = '';
-    const PORT = '8080'; // Phải trùng với port trong server.js
 
     // Bấm Enter để tìm kiếm
     function handleEnter(e) {
@@ -180,8 +179,8 @@
         resetDownloadUI();
 
         try {
-            // GỌI ĐÚNG LOCALHOST ĐỂ TRÁNH LỖI CHUYỂN HƯỚNG
-            const response = await fetch(`http://localhost:${PORT}/api/info?url=${encodeURIComponent(url)}`);
+            // Dùng relative URL để tự động theo domain hiện tại
+            const response = await fetch(`/api/info?url=${encodeURIComponent(url)}`);
             const data = await response.json();
 
             if (data.error) throw new Error(data.error);
@@ -249,8 +248,8 @@
 
         const safeTitle = currentTitle || 'nhac';
 
-        // Tạo EventSource để nhận progress updates
-        const progressUrl = `http://localhost:${PORT}/api/download-progress?url=${encodeURIComponent(currentUrl)}&title=${encodeURIComponent(safeTitle)}&quality=${quality}`;
+        // Tạo EventSource để nhận progress updates (dùng relative URL)
+        const progressUrl = `/api/download-progress?url=${encodeURIComponent(currentUrl)}&title=${encodeURIComponent(safeTitle)}&quality=${quality}`;
         const eventSource = new EventSource(progressUrl);
 
         eventSource.onmessage = (event) => {
@@ -270,8 +269,8 @@
                 progressStatus.textContent = '✅ Hoàn thành!';
                 progressStatus.style.color = '#4CAF50';
 
-                // Hiển thị link download
-                downloadLink.href = `http://localhost:${PORT}${data.downloadUrl}`;
+                // Hiển thị link download (dùng relative URL)
+                downloadLink.href = data.downloadUrl;
                 downloadComplete.style.display = 'block';
 
                 // Reset nút download sau 3 giây
