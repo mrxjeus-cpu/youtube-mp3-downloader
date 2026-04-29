@@ -207,10 +207,14 @@ app.get('/api/download-progress', async (req, res) => {
             '--no-warnings'
         ];
 
+        // Log command để debug
+        console.log(`[DEBUG] Command: ${PYTHON_PATH} ${args.join(' ')}`);
+
         const ytDlp = spawn(PYTHON_PATH, args);
 
         let lastProgress = 0;
         let isConverting = false;
+        let errorOutput = ''; // Thu thập lỗi từ stderr
 
         // Parse progress từ cả stdout và stderr
         ytDlp.stdout.on('data', (data) => {
@@ -219,7 +223,9 @@ app.get('/api/download-progress', async (req, res) => {
         });
 
         ytDlp.stderr.on('data', (data) => {
-            const lines = data.toString().split('\n');
+            const text = data.toString();
+            errorOutput += text; // Thu thập lỗi
+            const lines = text.split('\n');
             parseProgress(lines);
         });
 
@@ -272,12 +278,27 @@ app.get('/api/download-progress', async (req, res) => {
                     downloadUrl: `/api/download-file?filename=${encodeURIComponent(safeTitle)}.mp3`
                 });
             } else {
-                console.error(`[ERROR] Download failed | Exit code: ${code} | File exists: ${fs.existsSync(outputPath)}`);
+                // Log chi tiết lỗi để debug
+                console.error('===== DOWNLOAD PROGRESS ERROR =====');
+                console.error(`[ERROR] Exit code: ${code}`);
+                console.error(`[ERROR] File exists: ${fs.existsSync(outputPath)}`);
+                console.error(`[ERROR] Python: ${PYTHON_PATH}`);
+                console.error(`[ERROR] yt-dlp: ${YT_DLP_PATH}`);
+                console.error(`[ERROR] Stderr output:\n${errorOutput}`);
+                console.error('===== END ERROR =====');
+
+                // Gửi lỗi chi tiết về frontend
+                const errorMsg = errorOutput.includes('ffmpeg') || errorOutput.includes('FFmpeg')
+                    ? 'Lỗi: Chưa cài đặt FFmpeg trên server'
+                    : errorOutput.includes('not found')
+                    ? 'Lỗi: Python hoặc yt-dlp không tìm thấy'
+                    : 'Không thể tải bài hát. Vui lòng thử lại.';
+
                 sendProgress({
                     status: 'Lỗi!',
                     progress: 0,
                     stage: 'error',
-                    error: 'Không thể tải bài hát. Vui lòng thử lại.'
+                    error: errorMsg
                 });
             }
             res.end();
@@ -322,16 +343,150 @@ app.get('/api/download-file', (req, res) => {
     }
 });
 
+// ---------------- API 5: HEALTH CHECK (Kiểm tra dependencies) ----------------
+app.get('/api/health', async (req, res) => {
+    const checks = {
+        python: { installed: false, version: null, path: PYTHON_PATH },
+        ffmpeg: { installed: false, version: null },
+        ytDlp: { installed: false, version: null, path: YT_DLP_PATH },
+        tempDir: { exists: false, path: TEMP_DIR, writable: false }
+    };
+
+    // Kiểm tra Python
+    try {
+        const { stdout } = await execAsync(`"${PYTHON_PATH}" --version`);
+        checks.python.installed = true;
+        checks.python.version = stdout.trim();
+    } catch (error) {
+        checks.python.error = error.message;
+    }
+
+    // Kiểm tra FFmpeg
+    try {
+        const { stdout } = await execAsync('ffmpeg -version');
+        checks.ffmpeg.installed = true;
+        checks.ffmpeg.version = stdout.split('\n')[0];
+    } catch (error) {
+        checks.ffmpeg.error = 'FFmpeg không được cài đặt';
+    }
+
+    // Kiểm tra yt-dlp
+    try {
+        const { stdout } = await execAsync(`"${PYTHON_PATH}" "${YT_DLP_PATH}" --version`);
+        checks.ytDlp.installed = true;
+        checks.ytDlp.version = stdout.trim();
+    } catch (error) {
+        checks.ytDlp.error = error.message;
+    }
+
+    // Kiểm tra temp dir
+    checks.tempDir.exists = fs.existsSync(TEMP_DIR);
+    if (checks.tempDir.exists) {
+        try {
+            fs.accessSync(TEMP_DIR, fs.constants.W_OK);
+            checks.tempDir.writable = true;
+        } catch (error) {
+            checks.tempDir.error = 'Temp dir không có quyền ghi';
+        }
+    }
+
+    // Tính tổng trạng thái
+    const allChecksPassed = checks.python.installed && checks.ffmpeg.installed && checks.ytDlp.installed && checks.tempDir.writable;
+
+    res.json({
+        status: allChecksPassed ? 'healthy' : 'unhealthy',
+        checks,
+        timestamp: new Date().toISOString()
+    });
+});
+
 // Chạy server ở cổng từ .env hoặc mặc định 8080
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-    console.log('=================================');
-    console.log('🚀 YouTube MP3 Downloader Started');
-    console.log('=================================');
-    console.log(`🌐 Server URL: http://localhost:${PORT}`);
-    console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🐍 Python Path: ${PYTHON_PATH}`);
-    console.log(`📁 Temp Dir: ${TEMP_DIR}`);
-    console.log(`🎵 Default Quality: ${process.env.DEFAULT_AUDIO_QUALITY || '128'}kbps`);
-    console.log('=================================');
+
+// Hàm kiểm tra file/path có tồn tại không
+function checkPathExists(label, filePath) {
+    const exists = fs.existsSync(filePath);
+    return `${exists ? '✅' : '❌'} ${label}: ${filePath} ${exists ? '' : '(KHÔNG TỒN TẠI!)'}`;
+}
+
+// Hàm kiểm tra biến môi trường
+function checkEnvVar(label, value, defaultValue = 'CHƯA CẤU HÌNH') {
+    const displayValue = value || defaultValue;
+    return `${label}: ${displayValue}`;
+}
+
+app.listen(PORT, async () => {
+    console.log('\n=================================');
+    console.log('🚀 YouTube MP3 Downloader Starting...');
+    console.log('=================================\n');
+
+    // Environment Info
+    console.log('📋 ENVIRONMENT:');
+    console.log(`   ${checkEnvVar('NODE_ENV', process.env.NODE_ENV, 'development')}`);
+    console.log(`   ${checkEnvVar('PORT', PORT)}`);
+    console.log(`   ${checkEnvVar('BASE_URL', process.env.BASE_URL)}`);
+
+    // Server Info
+    console.log('\n🌐 SERVER:');
+    console.log(`   Local URL: http://localhost:${PORT}`);
+    console.log(`   External URL: ${process.env.BASE_URL || 'N/A'}`);
+
+    // Python Configuration
+    console.log('\n🐍 PYTHON CONFIG:');
+    console.log(`   ${checkEnvVar('PYTHON_PATH', PYTHON_PATH)}`);
+    try {
+        const { stdout } = await execAsync(`"${PYTHON_PATH}" --version 2>&1`);
+        console.log(`   ✅ Python Version: ${stdout.trim()}`);
+    } catch (error) {
+        console.log(`   ❌ Python Error: ${error.message.replace(/\n/g, ' ')}`);
+    }
+
+    // yt-dlp Configuration
+    console.log('\n📼 YT-DLP CONFIG:');
+    console.log(`   ${checkEnvVar('YT_DLP_PATH', YT_DLP_PATH)}`);
+    const ytDlpAbsolutePath = path.resolve(process.cwd(), YT_DLP_PATH);
+    console.log(`   ${checkPathExists('Absolute Path', ytDlpAbsolutePath)}`);
+    try {
+        const { stdout } = await execAsync(`"${PYTHON_PATH}" "${YT_DLP_PATH}" --version 2>&1`);
+        console.log(`   ✅ yt-dlp Version: ${stdout.trim()}`);
+    } catch (error) {
+        console.log(`   ❌ yt-dlp Error: ${error.message.replace(/\n/g, ' ')}`);
+    }
+
+    // FFmpeg Check
+    console.log('\n🎬 FFMPEG:');
+    try {
+        const { stdout } = await execAsync('ffmpeg -version 2>&1');
+        console.log(`   ✅ FFmpeg: ${stdout.split('\n')[0]}`);
+    } catch (error) {
+        console.log(`   ❌ FFmpeg Error: CHƯA CÀI ĐẶT! (sudo apt install ffmpeg -y)`);
+    }
+
+    // Temp Directory
+    console.log('\n📁 TEMP DIRECTORY:');
+    console.log(`   ${checkEnvVar('TEMP_DIR', process.env.TEMP_DIR)}`);
+    console.log(`   ${checkPathExists('Absolute Path', TEMP_DIR)}`);
+    try {
+        fs.accessSync(TEMP_DIR, fs.constants.W_OK);
+        console.log(`   ✅ Writable: YES`);
+    } catch (error) {
+        console.log(`   ❌ Writable: NO (Không có quyền ghi!)`);
+    }
+
+    // Download Settings
+    console.log('\n⚙️  DOWNLOAD SETTINGS:');
+    console.log(`   ${checkEnvVar('DEFAULT_AUDIO_QUALITY', process.env.DEFAULT_AUDIO_QUALITY, '128kbps')}`);
+    console.log(`   ${checkEnvVar('CORS_ORIGIN', process.env.CORS_ORIGIN, '*')}`);
+
+    // Security
+    console.log('\n🔒 SECURITY:');
+    if (process.env.CORS_ORIGIN === '*') {
+        console.log(`   ⚠️  CORS: Cho phép tất cả origins (*)`);
+    } else {
+        console.log(`   ✅ CORS: Chỉ cho phép ${process.env.CORS_ORIGIN}`);
+    }
+
+    console.log('\n=================================');
+    console.log('✅ Server Ready! Listening for requests...');
+    console.log('=================================\n');
 });
