@@ -1,5 +1,6 @@
 node_modules/
 temp/
+logs/
 
 # Environment variables (keep .env.example)
 .env
