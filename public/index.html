@@ -273,13 +273,14 @@
                 downloadLink.href = data.downloadUrl;
                 downloadComplete.style.display = 'block';
 
-                // Reset nút download sau 3 giây
+                // Ẩn nút download và disabled - không cho tải lại
+                downloadBtn.style.display = 'none';
+                downloadBtn.disabled = true;
+
+                // Ẩn progress bar sau 5 giây (giữ link download)
                 setTimeout(() => {
-                    downloadBtn.disabled = false;
-                    downloadBtn.style.display = 'block';
-                    downloadBtn.textContent = '⬇️ Tải MP3';
                     progressContainer.style.display = 'none';
-                }, 3000);
+                }, 5000);
             }
 
             // Khi có lỗi
