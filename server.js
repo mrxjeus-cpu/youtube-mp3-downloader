@@ -49,19 +49,38 @@ function sanitizeFilename(name) {
 function cleanYouTubeUrl(url) {
     if (!url) return url;
 
+    console.log(`[DEBUG] Original URL: ${url}`);
+
+    // Xóa các query parameter không cần thiết như feature=shared
+    let cleanUrl = url;
+    try {
+        // Xóa feature=shared, si=... và các params không cần thiết
+        cleanUrl = url.split(/[?#]/)[0]; // Lấy phần trước ? hoặc #
+        console.log(`[DEBUG] After removing query params: ${cleanUrl}`);
+    } catch (e) {
+        console.log(`[DEBUG] Error cleaning URL: ${e.message}`);
+    }
+
     // Extract video ID from various YouTube URL formats
     const patterns = [
-        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/,
-        /[?&]v=([^&\n?#]+)/
+        /youtube\.com\/watch\?v=([^&\n?#]+)/,
+        /youtu\.be\/([^/?\n#]+)/,
+        /youtube\.com\/embed\/([^/?\n?#]+)/,
+        /youtube\.com\/v\/([^/?\n?#]+)/,
+        /youtube\.com\/shorts\/([^/?\n?#]+)/
     ];
 
     for (const pattern of patterns) {
-        const match = url.match(pattern);
+        const match = cleanUrl.match(pattern);
         if (match && match[1]) {
-            return `https://www.youtube.com/watch?v=${match[1]}`;
+            const finalUrl = `https://www.youtube.com/watch?v=${match[1]}`;
+            console.log(`[DEBUG] Extracted video ID: ${match[1]}`);
+            console.log(`[DEBUG] Final URL: ${finalUrl}`);
+            return finalUrl;
         }
     }
 
+    console.log(`[DEBUG] No pattern matched, returning original`);
     return url;
 }
 
@@ -99,7 +118,17 @@ app.get('/api/info', async (req, res) => {
         console.error(`[ERROR] Command: "${PYTHON_PATH}" "${YT_DLP_PATH}" "${cleanUrl}" --dump-single-json --no-warnings --no-playlist`);
         console.error('===== END ERROR DETAILS =====');
 
-        res.status(500).json({ error: 'Link không hợp lệ hoặc đã bị giới hạn. Vui lòng thử link khác.' });
+        // Phân loại lỗi để thông báo rõ hơn
+        let errorMessage = 'Link không hợp lệ hoặc đã bị giới hạn. Vui lòng thử link khác.';
+        if (error.stderr && error.stderr.includes('This video is not available')) {
+            errorMessage = 'Video này không khả dụng (private, bị xóa, hoặc bị giới hạn khu vực).';
+        } else if (error.stderr && error.stderr.includes('Sign in to confirm')) {
+            errorMessage = 'Video yêu cầu xác thực tuổi. Vui lòng thử video khác.';
+        } else if (error.stderr && error.stderr.includes('HTTP Error 429')) {
+            errorMessage = 'Đã gửi quá nhiều request. Vui lòng thử lại sau vài phút.';
+        }
+
+        res.status(500).json({ error: errorMessage });
     }
 });
 
@@ -288,11 +317,18 @@ app.get('/api/download-progress', async (req, res) => {
                 console.error('===== END ERROR =====');
 
                 // Gửi lỗi chi tiết về frontend
-                const errorMsg = errorOutput.includes('ffmpeg') || errorOutput.includes('FFmpeg')
-                    ? 'Lỗi: Chưa cài đặt FFmpeg trên server'
-                    : errorOutput.includes('not found')
-                    ? 'Lỗi: Python hoặc yt-dlp không tìm thấy'
-                    : 'Không thể tải bài hát. Vui lòng thử lại.';
+                let errorMsg = 'Không thể tải bài hát. Vui lòng thử lại.';
+                if (errorOutput.includes('This video is not available')) {
+                    errorMsg = 'Video này không khả dụng (private, bị xóa, hoặc bị giới hạn khu vực).';
+                } else if (errorOutput.includes('Sign in to confirm')) {
+                    errorMsg = 'Video yêu cầu xác thực tuổi. Vui lòng thử video khác.';
+                } else if (errorOutput.includes('HTTP Error 429')) {
+                    errorMsg = 'Đã gửi quá nhiều request. Vui lòng thử lại sau vài phút.';
+                } else if (errorOutput.includes('ffmpeg') || errorOutput.includes('FFmpeg')) {
+                    errorMsg = 'Lỗi: Chưa cài đặt FFmpeg trên server';
+                } else if (errorOutput.includes('not found')) {
+                    errorMsg = 'Lỗi: Python hoặc yt-dlp không tìm thấy';
+                }
 
                 sendProgress({
                     status: 'Lỗi!',

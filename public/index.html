@@ -24,17 +24,42 @@
             max-width: 450px;
         }
         h2 { text-align: center; color: #333; margin-top: 0;}
+        .input-wrapper {
+            position: relative;
+            margin-bottom: 15px;
+        }
         input[type="text"] {
             width: 100%;
-            padding: 12px 15px;
+            padding: 12px 40px 12px 15px;
             border: 1px solid #ddd;
             border-radius: 8px;
             box-sizing: border-box;
-            margin-bottom: 15px;
             font-size: 14px;
             transition: border-color 0.3s;
         }
         input[type="text"]:focus { border-color: #ff0000; outline: none; }
+        .clear-btn {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: #ccc;
+            border: none;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            font-size: 16px;
+            line-height: 1;
+            color: white;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+            padding: 0;
+        }
+        .clear-btn:hover { background: #999; }
+        .clear-btn.show { display: flex; }
         button {
             padding: 12px;
             background: #ff0000;
@@ -110,7 +135,10 @@
 
 <div class="container">
     <h2>🎵 YouTube to MP3</h2>
-    <input type="text" id="urlInput" placeholder="Dán link YouTube vào đây..." onkeypress="handleEnter(event)">
+    <div class="input-wrapper">
+        <input type="text" id="urlInput" placeholder="Dán link YouTube vào đây..." onkeypress="handleEnter(event)" oninput="toggleClearBtn()">
+        <button class="clear-btn" id="clearBtn" onclick="clearInput()" type="button">×</button>
+    </div>
     <button id="fetchBtn" onclick="fetchInfo()">Lấy thông tin bài hát</button>
 
     <div id="error" class="error"></div>
@@ -159,6 +187,29 @@
     // Bấm Enter để tìm kiếm
     function handleEnter(e) {
         if (e.key === 'Enter') fetchInfo();
+    }
+
+    // Xóa nội dung input
+    function clearInput() {
+        const input = document.getElementById('urlInput');
+        input.value = '';
+        input.focus();
+        toggleClearBtn();
+
+        // Ẩn kết quả và lỗi
+        document.getElementById('result').style.display = 'none';
+        document.getElementById('error').textContent = '';
+    }
+
+    // Hiện/ẩn nút xóa
+    function toggleClearBtn() {
+        const input = document.getElementById('urlInput');
+        const clearBtn = document.getElementById('clearBtn');
+        if (input.value.length > 0) {
+            clearBtn.classList.add('show');
+        } else {
+            clearBtn.classList.remove('show');
+        }
     }
 
     async function fetchInfo() {
