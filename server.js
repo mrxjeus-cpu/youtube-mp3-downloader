@@ -121,7 +121,7 @@ app.get('/api/info', async (req, res) => {
         // Phân loại lỗi để thông báo rõ hơn
         let errorMessage = 'Link không hợp lệ hoặc đã bị giới hạn. Vui lòng thử link khác.';
         if (error.stderr && error.stderr.includes('This video is not available')) {
-            errorMessage = 'Video này không khả dụng (private, bị xóa, hoặc bị giới hạn khu vực).';
+            errorMessage = 'Video này không khả dụng. Có thể: video private, bị xóa, là nội dung trẻ em (kids), hoặc bị giới hạn khu vực.';
         } else if (error.stderr && error.stderr.includes('Sign in to confirm')) {
             errorMessage = 'Video yêu cầu xác thực tuổi. Vui lòng thử video khác.';
         } else if (error.stderr && error.stderr.includes('HTTP Error 429')) {
@@ -319,7 +319,7 @@ app.get('/api/download-progress', async (req, res) => {
                 // Gửi lỗi chi tiết về frontend
                 let errorMsg = 'Không thể tải bài hát. Vui lòng thử lại.';
                 if (errorOutput.includes('This video is not available')) {
-                    errorMsg = 'Video này không khả dụng (private, bị xóa, hoặc bị giới hạn khu vực).';
+                    errorMsg = 'Video này không khả dụng. Có thể: video private, bị xóa, là nội dung trẻ em (kids), hoặc bị giới hạn khu vực.';
                 } else if (errorOutput.includes('Sign in to confirm')) {
                     errorMsg = 'Video yêu cầu xác thực tuổi. Vui lòng thử video khác.';
                 } else if (errorOutput.includes('HTTP Error 429')) {
